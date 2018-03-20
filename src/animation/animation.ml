@@ -97,20 +97,21 @@ end
 
 (*a Geometry things *)
 (*c ogl_obj_animation *)
-let map_filename = "fullmap.png"
+let map_filename = "sample.png"
 let image_ba = 
    Printf.printf "Open image %s\n" map_filename;
    let image = ImageLib.openfile map_filename in
    Printf.printf "Opened image %s\n" map_filename;
-   let (r,g,b) =
+   let (r,g,b,a) =
      match image.pixels with
-     | RGB (r,g,b) -> (r,g,b)
-     | RGBA (r,g,b,a) -> (r,g,b)
+     | RGB (r,g,b)    -> (r,g,b,r)
+     | RGBA (r,g,b,a) -> (r,g,b,a)
      | _ -> raise Not_found
     in
     let r = match r with Pix8 r -> r | _ -> raise Not_found in
     let g = match g with Pix8 g -> g | _ -> raise Not_found in
     let b = match b with Pix8 b -> b | _ -> raise Not_found in
+    let a = match a with Pix8 a -> a | _ -> raise Not_found in
     let width = Bigarray.Array2.dim1 r in
     let height = Bigarray.Array2.dim2 r in
     let ba = ba_uint8_array (width*height*4) in
@@ -119,7 +120,7 @@ let image_ba =
             ba.{(x+y*width)*4+0} <- r.{x,y};
             ba.{(x+y*width)*4+1} <- g.{x,y};
             ba.{(x+y*width)*4+2} <- b.{x,y};
-            ba.{(x+y*width)*4+3} <- 255;
+            ba.{(x+y*width)*4+3} <- (if (a!=r) then 255 else a.{x,y});
         done
     done;
     (width, height, ba)
