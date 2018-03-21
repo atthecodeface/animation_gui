@@ -5,6 +5,7 @@
   (libraries (
     sdl_ogl_gui
     ogl_gui
+    shm_ipc
     imagelib
     batteries
   ))
