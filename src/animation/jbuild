@@ -1,7 +1,7 @@
 (jbuild_version 1)
 
 (executable (
-  (name animation)
+  (name animation_top)
   (libraries (
     sdl_ogl_gui
     ogl_gui
@@ -13,6 +13,6 @@
 
 (alias (
   (name    run_top)
-  (deps    (animation.exe))
+  (deps    (animation_top.exe))
   (action  (run ${<}))
 ))

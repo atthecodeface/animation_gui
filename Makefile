@@ -2,8 +2,8 @@ all: animation
 
 .PHONY:animation
 animation:
-	jbuilder build ./_build/default/src/animation/animation.exe
-	./_build/default/src/animation/animation.exe
+	jbuilder build ./_build/default/src/animation/animation_top.exe
+	./_build/default/src/animation/animation_top.exe
 
 .PHONY:clean
 clean:
