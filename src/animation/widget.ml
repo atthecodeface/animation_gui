@@ -201,12 +201,16 @@ class ogl_widget_animation_server stylesheet name_values server =
         Gl.uniform1i      other_uids.(2) 0 (* T0 = texture sampler 0 *);
 
         List.iter (fun o -> o#draw view_set other_uids) objs;
+        let anim_obj i o =
+           Animation_server.Object.draw o other_uids
+        in
+        Animation_server.AnimationServer.iter_objects server anim_obj;
         Gl.bind_vertex_array 0;
       end
 
     (*f idle *)
     method idle _ = 
-      Animlib.Shm_server.Server.idle server;
+      Animation_server.AnimationServer.idle server;
       if self # is_key_down ',' then self#move_forward ((-0.1) /. !scale);
       if self # is_key_down 'l' then self#move_forward (0.1 /. !scale);
       if self # is_key_down 'q' then self#move_left ((-0.01) /. !scale);
@@ -227,8 +231,12 @@ class ogl_widget_animation_server stylesheet name_values server =
       if (v!=0) then self # yaw ((float v) /. 32768.0 /. 40.);
       let v = self # joystick_axis_value 3 in
       if (v!=0) then self # pitch ((float v) /. 32768.0 /. 40.);
+        let anim_obj i o =
+          Printf.printf "Model %d\n" i;
+        in
+        Animation_server.AnimationServer.iter_objects server anim_obj;
       if self # is_key_down '=' then None
-      else if not (Animlib.Shm_server.Server.is_alive server) then None
+      else if not (Animation_server.AnimationServer.is_alive server) then None
       else
         (self#request_redraw ; Some 10)
 

@@ -27,6 +27,7 @@ struct
                                 ]
 
     let create id (desc:(t_vap list)) (coords:t_ba_float32s) (indices:t_ba_uint16s) elements =
+      Printf.printf "Creating model id %d\n%!" id;
 
       (*b Create vao_glid, data_glid, index_glid *)
       let vao_glid = gl_int_val (Gl.gen_vertex_arrays 1) in
@@ -47,6 +48,10 @@ struct
       Gl.bind_buffer Gl.element_array_buffer index_glid;
       Gl.buffer_data Gl.element_array_buffer size (Some indices) Gl.static_draw;
       { id; vao_glid; index_glid; data_glid; elements }
+
+    let draw t =
+        Gl.bind_vertex_array t.vao_glid;
+        Gl.draw_elements Gl.triangle_strip 12 Gl.unsigned_short (`Offset 0)
 
     let delete t =
       gl_with_int (Gl.delete_buffers 1) t.index_glid;
@@ -70,10 +75,18 @@ struct
     let place t ba = ()
     let orient t ba = ()
     let delete t = ()
+
+    let draw t uids =
+      Gl.uniform_matrix4fv uids.(1) 1 true t.transformation;
+      Model.draw t.model
+   
 end
 
 module Client =
 struct
+    type t = {
+        server : Animlib.Shm_server.Server.t;
+      }
     type t_model   = Model.t
     type t_object  = Object.t
     type t_texture = int
@@ -85,5 +98,37 @@ struct
     let delete_model    m = Model.delete m
     let delete_object   o = Object.delete o
     let delete_texture  m = ()
+    let object_set_target    s time reason ba         = ()
+    let animate         why time = (why,time)
 end
-module AnimationServer = Animlib.Animation(Client)
+
+module Ac = Animlib.Animation(Client)
+module AnimationServer = 
+struct
+  include Ac
+
+  let create _ =
+    let server = Animlib.Shm_server.Server.create () in
+    animation_create {server;}
+
+  let is_alive t = Animlib.Shm_server.Server.is_alive t.parent.server
+
+  let idle t = 
+    let msg_callback client msg =
+      let msg_ba = Shm_ipc.Ipc.msg_ba msg in
+      let len = Bigarray.Array1.dim msg_ba in
+      for i=0 to len-1 do
+       Printf.printf "%02x " (Char.code (msg_ba.{i}));
+done;
+      (match (Ac.parse_shm_msg t msg_ba 0 len) with
+      | None     -> Printf.printf "Received message and handled okay\n";
+      | Some err -> Printf.printf "Received message, error '%s'\n" err;
+      );
+      Animlib.Shm_server.Server.msg_free t.parent.server msg;
+      Some ()
+    in
+    let _ = Animlib.Shm_server.Server.poll t.parent.server msg_callback 0 in
+    ()
+
+end
+
