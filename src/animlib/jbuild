@@ -1,0 +1,10 @@
+(jbuild_version 1)
+
+(library (
+  (name animlib)
+  (libraries (
+    shm_ipc
+    batteries
+  ))
+))
+

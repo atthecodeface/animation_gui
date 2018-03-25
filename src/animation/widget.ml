@@ -206,7 +206,7 @@ class ogl_widget_animation_server stylesheet name_values server =
 
     (*f idle *)
     method idle _ = 
-      Shm_server.Server.idle server;
+      Animlib.Shm_server.Server.idle server;
       if self # is_key_down ',' then self#move_forward ((-0.1) /. !scale);
       if self # is_key_down 'l' then self#move_forward (0.1 /. !scale);
       if self # is_key_down 'q' then self#move_left ((-0.01) /. !scale);
@@ -228,7 +228,7 @@ class ogl_widget_animation_server stylesheet name_values server =
       let v = self # joystick_axis_value 3 in
       if (v!=0) then self # pitch ((float v) /. 32768.0 /. 40.);
       if self # is_key_down '=' then None
-      else if not (Shm_server.Server.is_alive server) then None
+      else if not (Animlib.Shm_server.Server.is_alive server) then None
       else
         (self#request_redraw ; Some 10)
 

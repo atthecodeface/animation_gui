@@ -1,19 +1,17 @@
 (jbuild_version 1)
 
 (executable (
-  (name animation_top)
+  (name test)
   (libraries (
-    sdl_ogl_gui
-    ogl_gui
     animlib
     shm_ipc
-    imagelib
     batteries
+    alcotest
   ))
 ))
 
 (alias (
-  (name    run_top)
-  (deps    (animation_top.exe))
+  (name    run_test)
+  (deps    (test.exe))
   (action  (run ${<}))
 ))
