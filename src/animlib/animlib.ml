@@ -32,14 +32,14 @@ sig
   type t_model
   type t_object
   type t_texture
-  val create_model       : int -> t_ba_float32s -> t_ba_uint16s -> (int * int) array -> t_model option
-  val create_texture     : int -> int -> int -> int -> t_ba_chars -> t_texture option
-  val create_object      : int -> t_model -> t_object option
-  val object_set_target  : t_object -> float -> int -> t_ba_float32s -> unit
-  val delete_model       : t_model -> unit
-  val delete_object      : t_object -> unit
-  val delete_texture     : t_texture -> unit
-  val animate            : int -> float -> (int * float)
+  val create_model       : t -> int -> t_ba_float32s -> t_ba_uint16s -> (int * int) array -> t_model option
+  val create_texture     : t -> int -> int -> int -> int -> t_ba_chars -> t_texture option
+  val create_object      : t -> int -> t_model -> t_object option
+  val object_set_target  : t -> t_object -> float -> int -> t_ba_float32s -> unit
+  val delete_model       : t -> t_model -> unit
+  val delete_object      : t -> t_object -> unit
+  val delete_texture     : t -> t_texture -> unit
+  val animate            : t -> int -> float -> (int * float)
 end
 
 (*m Animation *)
@@ -132,21 +132,21 @@ struct
 
   (*f remove_model *)
   let remove_model t id =
-    map_model_of_id t id () (fun o -> (A.delete_model o; Hashtbl.remove t.models id))
+    map_model_of_id t id () (fun o -> (A.delete_model t.parent o; Hashtbl.remove t.models id))
 
   (*f remove_object *)
   let remove_object t id =
-    map_object_of_id t id () (fun o -> (A.delete_object o; Hashtbl.remove t.objects id))
+    map_object_of_id t id () (fun o -> (A.delete_object t.parent o; Hashtbl.remove t.objects id))
 
   (*f remove_texture *)
   let remove_texture t id =
-    map_texture_of_id t id () (fun o -> (A.delete_texture o; Hashtbl.remove t.textures id))
+    map_texture_of_id t id () (fun o -> (A.delete_texture t.parent o; Hashtbl.remove t.textures id))
 
   (*f reset *)
   let reset t = 
-    iter_textures t (fun i t -> A.delete_texture t);
-    iter_objects  t (fun i t -> A.delete_object t);
-    iter_models   t (fun i t -> A.delete_model t);
+    iter_textures t (fun i tx -> A.delete_texture t.parent tx);
+    iter_objects  t (fun i o -> A.delete_object t.parent o);
+    iter_models   t (fun i m -> A.delete_model t.parent m);
     Hashtbl.reset t.textures;
     Hashtbl.reset t.objects;
     Hashtbl.reset t.models;
@@ -215,7 +215,7 @@ struct
       let (is_ofs,is_len) = mc.indices in
       let cs = Shm_ipc.Ba.retype_sub Bigarray.float32        Bigarray.c_layout msg_ba cs_ofs (cs_len*4) in
       let is = Shm_ipc.Ba.retype_sub Bigarray.int16_unsigned Bigarray.c_layout msg_ba is_ofs (is_len*2) in
-      let opt_model = A.create_model mc.id cs is mc.elements in
+      let opt_model = A.create_model a.parent mc.id cs is mc.elements in
       (mc.id, opt_model)
 
   end
@@ -266,8 +266,8 @@ struct
     let rpc_create_parse_msg a msg_ba ofs len =
       let mc = create () in
       let mc = Shm_ipc.Mbf.fold_message msg_ba create_parser_of_key mc ofs len in
-      match model_of_id a  mc.model_id with
-      | Some model_id -> (mc.id, A.create_object mc.id model_id)
+      match model_of_id a mc.model_id with
+      | Some model_id -> (mc.id, A.create_object a.parent mc.id model_id)
       | _ -> (mc.id, None)
 
     (*f set_target_parse_* - mbf parse callback to set object id *)
@@ -288,6 +288,37 @@ struct
       let st = {st_id=0;st_time=0.;st_reason=0;st_ba=ba_dummy_floats} in
       let st = Shm_ipc.Mbf.fold_message msg_ba set_target_parser_of_key st ofs len in
       Some (st.st_id, st.st_time, st.st_reason, st.st_ba)
+
+    (*f All done *)
+  end
+
+  (*m Timing *)
+  module Timing = struct
+    (*t BadArgs exception *)
+    exception BadArgs of string
+
+    (*t ta - animate *)
+    type ta = {
+        mutable why : int;
+        mutable time : float;
+      }
+
+    (*f animate_parse_* - mbf parse callback to set object id *)
+    let animate_parse_why    ta why    = ta.why   <- why     ; ta
+    let animate_parse_time   ta time   = ta.time  <- time   ; ta
+
+    (*f rpc_animate_args *)
+    let rpc_animate_args why time =
+      Shm_ipc.Mbf.Make.(List [Int why; Float time;])
+
+    (*f animate_parser_of_key - map from mbf key to parser (must match rpc_animate_args) *)
+    let animate_parser_of_key k = Shm_ipc.Mbf.([| Int animate_parse_why ; Float animate_parse_time |]).(k)
+
+    (*f rpc_animate_parse_msg - parse object set target message *)
+    let rpc_animate_parse_msg a msg_ba ofs len =
+      let ta = {why=0; time=0.;} in
+      let ta = Shm_ipc.Mbf.fold_message msg_ba animate_parser_of_key ta ofs len in
+      Some (ta.why, ta.time)
 
     (*f All done *)
   end
@@ -343,10 +374,28 @@ struct
   (*f parse_object_set_target *)
   let parse_object_set_target t (msg_ba,ofs,len) = 
     (match (Object.rpc_set_target_parse_msg t msg_ba ofs len) with
-     | Some (id, time, reason, ba) -> map_object_of_id t id () (fun o -> A.object_set_target o time reason ba)
+     | Some (id, time, reason, ba) -> map_object_of_id t id () (fun o -> A.object_set_target t.parent o time reason ba)
      | _ -> ()
     );
     t
+
+  (*f rpc_object_set_target_msg *)
+  let rpc_object_set_target_msg ba size id time reason args =
+    let args = Object.rpc_set_target_args id time reason args in
+    rpc_msg ba size "object_set_target" args
+
+  (*f parse_animate *)
+  let parse_animate t (msg_ba,ofs,len) = 
+    (match (Timing.rpc_animate_parse_msg t msg_ba ofs len) with
+     | Some (why, time) -> A.animate t.parent why time
+     | _ -> (0,0.)
+    );
+    t
+
+  (*f rpc_animate_msg *)
+  let rpc_animate_msg ba size why time =
+    let args = Timing.rpc_animate_args why time in
+    rpc_msg ba size "animate" args
 
   (*f init *)
   let _ =                      
@@ -355,6 +404,7 @@ struct
     Rpc.add_type "object_create"      (Shm_ipc.Mbf.Blob parse_object_create);
     Rpc.add_type "object_delete"      (Shm_ipc.Mbf.Int parse_object_delete);
     Rpc.add_type "object_set_target"  (Shm_ipc.Mbf.Blob parse_object_set_target);
+    Rpc.add_type "animate"            (Shm_ipc.Mbf.Blob parse_animate);
     ()
   
   (*f parser_of_key *)
@@ -362,7 +412,7 @@ struct
 
   (*f parse_shm_msg *)
   let parse_shm_msg t msg_ba ofs len = 
-    Shm_ipc.Mbf.fold_root_message ~verbose:true msg_ba parser_of_key t ofs len;
+    ignore (Shm_ipc.Mbf.fold_root_message ~verbose:false msg_ba parser_of_key t ofs len);
     t.opt_err
 
   (*f All done *)
@@ -375,14 +425,14 @@ struct
     type t_model   = string
     type t_object  = string
     type t_texture = string
-    let create_model    s cs is es   = Some (sfmt "model %d"   s)
-    let create_texture  s t w h data = Some (sfmt "texture %d" s)
-    let create_object   s m          = Some (sfmt "object %d"  s)
-    let object_set_target    s time reason ba         = ()
-    let delete_model    m = ()
-    let delete_object   m = ()
-    let delete_texture  m = ()
-    let animate         why time = (why,time)
+    let create_model    t s cs is es   = Some (sfmt "model %d"   s)
+    let create_texture  t s tx w h data = Some (sfmt "texture %d" s)
+    let create_object   t s m          = Some (sfmt "object %d"  s)
+    let object_set_target    t s time reason ba         = ()
+    let delete_model    t m = ()
+    let delete_object   t m = ()
+    let delete_texture  t m = ()
+    let animate         t why time = (why,time)
 end
 
 module BasicClient =

@@ -1,0 +1,16 @@
+(jbuild_version 1)
+
+(executable (
+  (name example_client)
+  (libraries (
+    animlib
+    shm_ipc
+    batteries
+  ))
+))
+
+(alias (
+  (name    run_example)
+  (deps    (example_client.exe))
+  (action  (run ${<}))
+))

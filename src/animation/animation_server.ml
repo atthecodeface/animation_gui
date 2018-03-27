@@ -61,46 +61,236 @@ struct
     
 end
 
+(*m Animatable_sig *)
+module type Animatable_sig =
+sig
+  type t
+  val create          : unit -> t
+  val interpolate_set : float -> t -> t -> t -> unit
+  val set_array       : t -> float array  -> t
+  val set_bigarray    : t -> t_ba_float32s -> t
+  val set             : t -> t -> t
+end
+
+(*m Animated *)
+module Animated(A:Animatable_sig) =
+struct
+
+  (*t structure t *)
+  type t = {
+    mutable interpolating : bool;
+    mutable last_time     : float;
+    mutable target_time   : float;
+    last_value    : A.t;
+    target_value  : A.t;
+    current_value : A.t;
+    }
+
+  (*f create *)
+  let create _ =
+    let last_value = A.create () in
+    let target_value = A.create () in
+    let current_value = A.create () in
+    {last_value; target_value; current_value; interpolating=false; last_time=0.; target_time=0.;}
+
+  (*f current_value *)
+  let current_value t = t.current_value
+
+  (*f set_value_array *)
+  let set_value_array t time floats =
+    t.target_time <- time;
+    ignore (A.set_array t.current_value floats);
+    t.interpolating <- false;
+    ()
+
+  (*f set_value_bigarray *)
+  let set_value_bigarray t time floats =
+    t.target_time <- time;
+    ignore (A.set_bigarray t.current_value floats);
+    t.interpolating <- false;
+    ()
+
+  (*f set_target_array *)
+  let set_target_array t time floats =
+    t.last_time <- t.target_time;
+    t.target_time <- time;
+    ignore (A.set_array t.target_value floats);
+    t.interpolating <- true;
+    ()
+
+  (*f set_target_bigarray *)
+  let set_target_bigarray t time floats =
+    t.last_time <- t.target_time;
+    t.target_time <- time;
+    ignore (A.set t.last_value t.current_value);
+    ignore (A.set_bigarray t.target_value floats);
+    t.interpolating <- true;
+    ()
+
+  (*f set_time *)
+  let set_time t time =
+    if not t.interpolating then (
+      t.target_time <- time;
+    ) else if (compare time t.last_time) = (compare time t.target_time) then (
+      t.target_time <- time;
+      t.interpolating <- false
+    ) else if (compare t.last_time t.target_time)=0 then (
+      t.target_time <- time;
+      t.interpolating <- false
+    ) else (
+      let tdiff = t.target_time -. t.last_time in
+      A.interpolate_set ((time -. t.last_time) /. tdiff) t.last_value t.target_value t.current_value
+    )
+
+  (*f All done *)
+end
+
+(*m Animatable_Linear_Vec4 *)
+module Animatable_Linear_Vec4 =
+struct
+  (*t struct t *)
+  type t = float array
+
+  (*f create *)
+  let create _ = Array.make 4 0.
+
+  (*f set *)
+  let set     t0 t1 = Array.iteri (fun i v->t0.(i)<-v) t1; t0
+
+  (*f set_array *)
+  let set_array     t a = Array.iteri (fun i v->t.(i)<-v) a; t
+
+  (*f set_bigarray *)
+  let set_bigarray  t a = Array.iteri (fun i _->t.(i)<-a.{i}) t; t
+
+  (*f interpolate_set *)
+  let interpolate_set  s t0 t1 t =
+    let oms = 1.0 -. s in
+    Printf.printf "Interpoloate %f %f\n%!" s oms;
+    Array.iteri (fun i _ -> t.(i) <- (oms *. t0.(i)) +. (s *. t1.(i))) t
+
+  (*f All done *)
+end
+
+(*m Animated_vec4 *)
+module Animated_vec4 = Animated(Animatable_Linear_Vec4)
+
+(*m Object *)
 module Object =
 struct
-    type t = {
+  (*t t structure *)
+  type t = {
       id : int;
       model : Model.t;
       transformation : t_ba_float32s;
-      }
-    let identity = [|1.;0.;0.;0.; 0.;1.;0.;0.; 0.;0.;1.;0.; 0.;0.;0.;0.|]
-    let create id model =
-      let transformation = ba_floats identity in
-      { id; model; transformation }
-    let place t ba = ()
-    let orient t ba = ()
-    let delete t = ()
+      translation : Animated_vec4.t;
+      orientation : Animated_vec4.t;
+    }
 
-    let draw t uids =
-      Gl.uniform_matrix4fv uids.(1) 1 true t.transformation;
-      Model.draw t.model
-   
+  (*v identity *)
+  let identity = [|1.;0.;0.;0.; 0.;1.;0.;0.; 0.;0.;1.;0.; 0.;0.;0.;0.|]
+
+  (*f create *)
+  let create id model =
+    let transformation = ba_floats identity in
+    { id; model; transformation;
+      translation=Animated_vec4.create ();
+      orientation=Animated_vec4.create ();
+    }
+
+  (*f delete *)
+  let delete t = ()
+
+  (*f draw *)
+  let draw t uids =
+    Gl.uniform_matrix4fv uids.(1) 1 true t.transformation;
+    Model.draw t.model
+
+  (*f set_target *)
+  let set_target t time reason ba =
+    Printf.printf "Set target %f\n%!" time;
+    let l = Bigarray.Array1.dim ba in
+    (
+      match reason with
+      | 1 -> if (time<=0.) then (Animated_vec4.set_value_bigarray t.translation time ba) else (Animated_vec4.set_target_bigarray t.translation time ba)
+      | 2 -> Animated_vec4.set_target_bigarray t.orientation time ba
+      | _ -> (
+        if (l=16) then (
+          Bigarray.Array1.blit ba t.transformation
+        );
+      )
+    );
+    ()
+
+  (*f set_time *)
+  let set_time t time =
+    Animated_vec4.set_time t.translation time;
+    Animated_vec4.set_time t.orientation time;
+    let cv = Animated_vec4.current_value t.translation in
+    let co = Animated_vec4.current_value t.translation in
+    t.transformation.{3} <- cv.(0);
+    t.transformation.{7} <- cv.(1);
+    t.transformation.{11} <- cv.(2);
+    t.transformation.{15} <- cv.(3);
+    ()
+
+  (*f All done *)   
 end
 
+(*m AnimateTiming *)
+module AnimateTiming =
+struct
+  type t = {
+    mutable paused : bool;
+    mutable time_now : float;
+    mutable time_per_idle : float;
+    }
+
+  let create _ = 
+    {
+      paused = true;
+      time_now = 0.;
+      time_per_idle = 0.;
+    }
+
+  let animate t why time =
+    (
+    match why with
+    | 0 -> t.paused <- true
+    | 1 -> t.time_now <- time
+    | 2 -> t.paused <- false; t.time_per_idle <- time
+    | _ -> t.paused <- true
+    );
+    (why, time)
+
+  let tick t =
+    if t.paused then None else (
+      t.time_now <- t.time_now +. t.time_per_idle;
+      (* Printf.printf "Time now %f\n%!" t.time_now;*) 
+      Some t.time_now
+    )
+end
+
+(*m Client *)
 module Client =
 struct
     type t = {
         server : Animlib.Shm_server.Server.t;
+        timing : AnimateTiming.t
       }
     type t_model   = Model.t
     type t_object  = Object.t
     type t_texture = int
-    let create_model    id cs is es   = Some (Model.create id Model.vnct_desc cs is es)
-    let create_texture  id t w h data = Some 0
-    let create_object   id m          = Some (Object.create id m)
-    let object_place    o ba         = Object.place o ba
-    let object_orient   o ba         = Object.orient o ba
-    let delete_model    m = Model.delete m
-    let delete_object   o = Object.delete o
-    let delete_texture  m = ()
-    let object_set_target    s time reason ba         = ()
-    let animate         why time = (why,time)
+    let create_model    t id cs is es   = Some (Model.create id Model.vnct_desc cs is es)
+    let create_texture  t id t w h data = Some 0
+    let create_object   t id m          = Some (Object.create id m)
+    let delete_model    t m = Model.delete m
+    let delete_object   t o = Object.delete o
+    let delete_texture  t m = ()
+    let object_set_target t s time reason ba  = Object.set_target s time reason ba
+    let animate         t why time = AnimateTiming.animate t.timing why time
 end
+module ClientObject = Object
 
 module Ac = Animlib.Animation(Client)
 module AnimationServer = 
@@ -109,19 +299,22 @@ struct
 
   let create _ =
     let server = Animlib.Shm_server.Server.create () in
-    animation_create {server;}
+    let timing = AnimateTiming.create () in
+    animation_create {server; timing}
 
   let is_alive t = Animlib.Shm_server.Server.is_alive t.parent.server
 
   let idle t = 
+    (
+      match AnimateTiming.tick t.parent.timing with
+      | Some time -> Ac.iter_objects t (fun i o -> ClientObject.set_time o time)
+      | _ -> ()
+    );
     let msg_callback client msg =
       let msg_ba = Shm_ipc.Ipc.msg_ba msg in
       let len = Bigarray.Array1.dim msg_ba in
-      for i=0 to len-1 do
-       Printf.printf "%02x " (Char.code (msg_ba.{i}));
-done;
       (match (Ac.parse_shm_msg t msg_ba 0 len) with
-      | None     -> Printf.printf "Received message and handled okay\n";
+      | None     -> Printf.printf "%!";
       | Some err -> Printf.printf "Received message, error '%s'\n" err;
       );
       Animlib.Shm_server.Server.msg_free t.parent.server msg;

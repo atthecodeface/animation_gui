@@ -63,7 +63,7 @@ let xml_additions server =
       let bg = new Ogl_gui.Obj.ogl_obj_geometry
                      Gl.triangle_strip 4 
                      [| 0; 3; 1; 2; |] (* indices *)
-                     [ ( [(0,3,Gl.float,false,0,11*4); (1,3,Gl.float,false,3*4,11*4); (2,3,Gl.float,false,6*4,11*4); (3,2,Gl.float,false,9*4,11*4); ],
+                     [ ( [(0,3,Gl.float,false,11*4,0); (1,3,Gl.float,false,11*4,3*4); (2,3,Gl.float,false,11*4,6*4); (3,2,Gl.float,false,11*4,9*4); ],
                       ba_floats [| -1.;-1.; 0.5;   0.;0.;1.;   0.1;0.4;0.1; 0.;0.;
                                     1.;-1.;0.;    0.;0.;1.;   0.1;0.4;0.0; 1.;0.;
                                     1.;1.;-0.5;     0.;0.;1.;   0.1;0.5;0.1; 1.;1.;
