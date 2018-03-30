@@ -46,46 +46,24 @@ let cube_msg =
   | Some x -> x
 
 
-(*Assoc (map , [("place", (ArrayFloat32 [||])), ("orient", ]]
-parser_of_key k = Shm_ipc.Mbf.([| RepFloat parse_place ; RepFloat parse_orient |]).(k)
- *)
-let send_and_wait client msg delay =  
-  ignore (Animlib.Shm_server.Client.send client msg);
-  let msg_callback msg =
-    Printf.printf "Got a message\n"; (Some ())
-    in
-  ignore (Animlib.Shm_server.Client.poll client msg_callback delay);
-  ()
-
-let move_to client msg msg_ba time delay id x y z =
-  ignore (Ac.rpc_object_set_target_msg msg_ba 1024 0 time 1 [|x;y;z;1.;|]);
-  send_and_wait client msg delay
-
-let animate client msg msg_ba why time =
-  ignore (Ac.rpc_animate_msg msg_ba 1024 why time);
-  send_and_wait client msg 10000
-
 let _ =
-  let client = Animlib.Shm_server.Client.create () in
-  let (msg,msg_ba) = Animlib.Shm_server.Client.msg_alloc client 1024 in
+  let client = Ac.create () in
+  Ac.reset client;
 
-  ignore (Ac.rpc_reset_msg msg_ba 1024);
-  send_and_wait client msg 10000;
-
-  let (msg,msg_ba) = Animlib.Shm_server.Client.msg_alloc client 1024 in
+  let (msg,msg_ba,id) = Ac.msg_alloc client 1024 in
   let l = Bigarray.Array1.dim cube_msg in
   Bigarray.Array1.(blit cube_msg (sub msg_ba 0 l));
-  send_and_wait client msg 10000;
+  Ac.send_and_wait client msg id;
 
-  let (msg,msg_ba) = Animlib.Shm_server.Client.msg_alloc client 1024 in
+  let (msg,msg_ba,id) = Ac.msg_alloc client 1024 in
   ignore (Ac.rpc_object_create_msg msg_ba 1024 0 cube_id);
-  send_and_wait client msg 10000;
+  Ac.send_and_wait client msg id;
 
-  let (msg,msg_ba) = Animlib.Shm_server.Client.msg_alloc client 1024 in
-  animate client msg msg_ba 2 0.012;
+  Ac.animate client 2 0.006;
 
-  let (msg,msg_ba) = Animlib.Shm_server.Client.msg_alloc client 1024 in
-  move_to client msg msg_ba (-1.) (10000) 0 0. 0. 0.;
+  Ac.move_to client (-1.) 0 0. 0. 0.;
+
+  Ac.animate client 1 (-1.0);         (* Run setting time to (i-1*1) *)
 
   for i=0 to 100 do
     let angle = 0.5 *. (float i) in
@@ -93,30 +71,8 @@ let _ =
     let y = 0.5 *. ( cos angle) in
     let z = 0.3 *. ( sin (1.5*.(angle +. 0.3))) in
     let time = (float i)*.1.0 in
-    let (msg,msg_ba) = Animlib.Shm_server.Client.msg_alloc client 1024 in
-    animate client msg msg_ba 1 (time -. 1.0);
-    let (msg,msg_ba) = Animlib.Shm_server.Client.msg_alloc client 1024 in
-    move_to client msg msg_ba time (1000*1000) 0 x y z;
+    Ac.move_to client time 0 x y z; (* Animate to i *)
+    Ac.wait_for_time client (time-.0.01);
   done;
   ()
 
-(*  let a = Ac.create () in
-  let ba = Bigarray.(Array1.create char c_layout 1024) in
-  let okay = Ac.rpc_model_create_msg ba 1024 0 [|320l;8l;256l;4l;0l;4l|] in
-  Printf.printf "Create message okay %b\n" okay;
-  Ac.parse_shm_msg a ba 0 1024;
-  let okay = Ac.rpc_object_create_msg ba 1024 0 0 in
-  Ac.parse_shm_msg a ba 0 1024;
-  Ac.iter_models a (fun i m -> Printf.printf "Model %d '%s'\n" i m);
-  Ac.iter_objects a (fun i m -> Printf.printf "Object %d '%s'\n" i m);
-  let okay = Ac.rpc_reset_msg ba 1024 in
-  Printf.printf "Reset message okay %b\n" okay;
-  Ac.parse_shm_msg a ba 0 1024;
-  Ac.iter_models a (fun i m -> Printf.printf "Model %d '%s'\n" i m);
-  Ac.iter_objects a (fun i m -> Printf.printf "Object %d '%s'\n" i m);
-  Ac.parse_shm_msg a cube_msg 0 1024;
-  Ac.iter_models a (fun i m -> Printf.printf "Model %d '%s'\n" i m);
-  Ac.iter_objects a (fun i m -> Printf.printf "Object %d '%s'\n" i m);
-  ()
-
- *)

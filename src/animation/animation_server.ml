@@ -227,7 +227,7 @@ struct
     Animated_vec4.set_time t.translation time;
     Animated_vec4.set_time t.orientation time;
     let cv = Animated_vec4.current_value t.translation in
-    let co = Animated_vec4.current_value t.translation in
+    let co = Animated_vec4.current_value t.orientation in
     t.transformation.{3} <- cv.(0);
     t.transformation.{7} <- cv.(1);
     t.transformation.{11} <- cv.(2);
@@ -259,9 +259,10 @@ struct
     | 0 -> t.paused <- true
     | 1 -> t.time_now <- time
     | 2 -> t.paused <- false; t.time_per_idle <- time
+    | 3 -> t.paused <- false;
     | _ -> t.paused <- true
     );
-    (why, time)
+    if t.paused then (256, t.time_now) else (257, t.time_now)
 
   let tick t =
     if t.paused then None else (
@@ -297,8 +298,8 @@ module AnimationServer =
 struct
   include Ac
 
-  let create _ =
-    let server = Animlib.Shm_server.Server.create () in
+  let create shm_size =
+    let server = Animlib.Shm_server.Server.create shm_size in
     let timing = AnimateTiming.create () in
     animation_create {server; timing}
 
@@ -310,14 +311,13 @@ struct
       | Some time -> Ac.iter_objects t (fun i o -> ClientObject.set_time o time)
       | _ -> ()
     );
-    let msg_callback client msg =
-      let msg_ba = Shm_ipc.Ipc.msg_ba msg in
+    let msg_callback client id msg msg_ba =
       let len = Bigarray.Array1.dim msg_ba in
-      (match (Ac.parse_shm_msg t msg_ba 0 len) with
-      | None     -> Printf.printf "%!";
-      | Some err -> Printf.printf "Received message, error '%s'\n" err;
-      );
-      Animlib.Shm_server.Server.msg_free t.parent.server msg;
+      let rc = (match (Ac.parse_shm_msg t msg_ba 0 len) with
+      | None     -> 0
+      | Some err -> Printf.printf "Received message, error '%s'\n" err; 1
+      ) in
+      ignore (Animlib.Shm_server.Server.send t.parent.server client msg);
       Some ()
     in
     let _ = Animlib.Shm_server.Server.poll t.parent.server msg_callback 0 in

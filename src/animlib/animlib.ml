@@ -331,7 +331,6 @@ struct
 
   (*f rpc_reset_msg *)
   let rpc_reset_msg ba size =
-    let args = Shm_ipc.Mbf.Make.Callback (fun _ _ -> ()) in
     let args = Shm_ipc.Mbf.Make.Int 0 in
     rpc_msg ba size "reset" args
 
@@ -387,8 +386,14 @@ struct
   (*f parse_animate *)
   let parse_animate t (msg_ba,ofs,len) = 
     (match (Timing.rpc_animate_parse_msg t msg_ba ofs len) with
-     | Some (why, time) -> A.animate t.parent why time
-     | _ -> (0,0.)
+     | Some (why, time) -> (
+       let (why, time) = A.animate t.parent why time in
+       let msg_ba = Shm_ipc.Ba.retype Bigarray.int32 Bigarray.c_layout msg_ba in
+       msg_ba.{2} <- Int32.of_int why;
+       let msg_ba = Shm_ipc.Ba.retype Bigarray.float32 Bigarray.c_layout msg_ba in
+       msg_ba.{4} <- time;
+     )
+     | _ -> ()
     );
     t
 
@@ -419,9 +424,14 @@ struct
 end
 
 (*a Top level *)
-module BasicClient_base =
+(*m BasicClient_base *)
+module type ClientType_sig =
+sig
+    type t
+end
+module BasicClient_base(ClientType:ClientType_sig) =
 struct
-    type t = int
+    type t = ClientType.t
     type t_model   = string
     type t_object  = string
     type t_texture = string
@@ -435,16 +445,129 @@ struct
     let animate         t why time = (why,time)
 end
 
-module BasicClient =
+(*m BasicClient *)
+module BasicClientType =
 struct
-  include Animation(BasicClient_base)
-  let create _ = animation_create 0
+  type t = {
+    client : Shm_server.Client.t;
+  }
+end
+module BasicClient =
+  struct
+    include Animation(BasicClient_base(BasicClientType))
+    type bct = BasicClientType.t
+
+    let create _ = 
+      let client = Shm_server.Client.create () in
+      let t:bct = {client;} in
+      ignore (animation_create t);
+      t
+
+    let client (t:bct) = t.client
+
+    let msg_alloc (t:bct) byte_size =
+      Shm_server.Client.msg_alloc t.client byte_size
+
+    let poll_idle (t:bct) delay =
+      let msg_callback rx_id msg msg_ba =
+        ignore (Shm_server.Client.msg_free t.client msg);
+        (Some ())
+      in
+      Shm_server.Client.poll t.client msg_callback delay
+
+    let poll_for_msg (t:bct) ?callback id delay =
+      let rec poll _ =
+        let response_received = ref None in
+        let msg_callback rx_id msg msg_ba =
+          if (rx_id=id) then (Option.may (fun cb->cb msg_ba) callback);
+          ignore (Shm_server.Client.msg_free t.client msg);
+          response_received := Some rx_id;
+          (Some ())
+        in
+        response_received := None;
+        if (Shm_server.Client.poll t.client msg_callback delay) then (
+          match (!response_received) with
+          | None -> false
+          | Some rx_id when (rx_id=id) -> true
+          | _ -> poll ()
+        ) else (
+          false
+        )
+      in
+      poll ()
+
+    let send (t:bct) msg id =  
+      ignore (Shm_server.Client.send t.client msg);
+      ()
+
+    let send_and_wait ?delay:(delay=100000) ?callback (t:bct) msg id =  
+      send t msg id;
+      poll_for_msg t ?callback:callback id delay
+
+    let reset t =
+      let (msg,msg_ba,id) = msg_alloc t 1024 in
+      ignore (rpc_reset_msg msg_ba 1024);
+      send_and_wait t msg id
+
+    let move_to t time id x y z =
+      let (msg,msg_ba,msg_id) = msg_alloc t 1024 in
+      ignore (rpc_object_set_target_msg msg_ba 1024 id time 1 [|x;y;z;1.;|]);
+      send_and_wait t msg msg_id
+
+    let animate t why time =
+      let (msg,msg_ba,id) = msg_alloc t 1024 in
+      ignore (rpc_animate_msg msg_ba 1024 why time);
+      send_and_wait t msg id
+
+    let wait_for_time t time =
+      let rec wait _ =
+        let current_time = ref None in
+        let current_time_cb msg_ba =
+          let msg_ba = Shm_ipc.Ba.retype Bigarray.int32 Bigarray.c_layout msg_ba in
+          if (Int32.to_int msg_ba.{2})=257 then (
+            let msg_ba = Shm_ipc.Ba.retype Bigarray.float32 Bigarray.c_layout msg_ba in
+            current_time := Some msg_ba.{4}
+          )
+        in
+        let (msg,msg_ba,id) = msg_alloc t 1024 in
+        ignore (rpc_animate_msg msg_ba 1024 3 0.);
+        send_and_wait ~callback:current_time_cb t msg id;
+        match !current_time with 
+        | Some sim_time -> (
+          let delay = int_of_float ((time-.sim_time) *. 100000.) in
+          Printf.printf "Time %f %f delay %d\n%!" time sim_time delay;
+          if delay<1000 then () else (poll_idle t delay; wait ())
+        )
+        | _ -> ()
+      in
+      wait ()
+
+
+(*
+
+  let create_model_ba model_id coords indices element_type num_elements =
+    let num_floats  = Array.length coords in
+    let num_indices = Array.length indices in
+    let indices_start = 128 in
+    let floats_start = indices_start + (2*num_indices) in
+    let floats_end   = floats_start  + (4*num_floats) in
+    let ba = Bigarray.(Array1.create char c_layout floats_end) in
+    let okay = Ac.rpc_model_create_msg ba indices_start model_id Int32.([|of_int floats_start;of_int num_floats;of_int indices_start; of_int num_indices; of_int element_type; of_int num_elements |]) in
+    if okay then (
+      let floats_ba  = ba_as_floats ba floats_start (floats_end - floats_start) in
+      let indices_ba = ba_as_int16s ba indices_start (floats_start - indices_start) in
+      Array.iteri (fun i f -> floats_ba.{i} <- f) coords;
+      Array.iteri (fun i n -> indices_ba.{i} <- n) indices;
+      Some ba
+    ) else (
+      None
+    )
+
+ *)
 end
 
 
   (*
   object_place  : object -> position -> quaternion -> scale -> result (?time?)
-  get_time  : unit -> time result
-  set_time  : time -> result
    *)
 
