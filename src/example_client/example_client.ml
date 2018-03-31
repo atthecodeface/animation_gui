@@ -54,16 +54,7 @@ let _ =
 
   Ac.reset client;
 
-  let image = Animlib.Image.create_from_image_file "sample.png" in
-  let ofs = 128 in
-  let ba_size = Animlib.Image.ba_size image in
-  let width  = Animlib.Image.width image in
-  let height = Animlib.Image.height image in
-  let (msg,msg_ba,msg_id) = Ac.msg_alloc client (ba_size+ofs) in
-  ignore (Ac.rpc_texture_create_msg msg_ba ofs 17 width height 0 ofs);
-  let ba = Shm_ipc.Ba.retype_sub Bigarray.int8_unsigned Bigarray.c_layout msg_ba ofs ba_size in
-  Animlib.Image.blit_ba image ba;
-  Ac.send_and_wait client msg msg_id;
+  Ac.create_texture_of_file client 17  "sample.png";
 
   Ac.send_msg_from_ba client cube_msg;
 

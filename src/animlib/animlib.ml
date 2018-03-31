@@ -720,6 +720,19 @@ module BasicClient =
       ignore (rpc_object_create_msg msg_ba 128 obj_id model_id);
       send_and_wait t msg msg_id
 
+    (*f create_texture_of_file *)
+    let create_texture_of_file t tex_id filename =
+      let image = Image.create_from_image_file filename in
+      let ofs = 128 in
+      let ba_size = Image.ba_size image in
+      let width  = Image.width image in
+      let height = Image.height image in
+      let (msg,msg_ba,msg_id) = msg_alloc t (ba_size+ofs) in
+      ignore (rpc_texture_create_msg msg_ba ofs tex_id width height 0 ofs);
+      let ba = Shm_ipc.Ba.retype_sub Bigarray.int8_unsigned Bigarray.c_layout msg_ba ofs ba_size in
+      Image.blit_ba image ba;
+      send_and_wait t msg msg_id
+
     (*f move_to - move an object to an x/y/z, wait for response *)
     let move_to t time id x y z =
       let (msg,msg_ba,msg_id) = msg_alloc t 128 in
