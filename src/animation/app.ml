@@ -73,6 +73,7 @@ let xml_additions server =
       let objs = [(bg :> Ogl_gui.Obj.ogl_obj); new Widget.ogl_obj_animation] in
       let widget = new Widget.ogl_widget_animation_server app.Ogl_gui.AppBuilder.stylesheet name_values server in
       widget # set_objs objs;
+      widget # set_objs [];
       widget # name_value_args name_values;
       Ogl_gui.AppBuilder.add_child app (widget :> Ogl_gui.Types.t_ogl_widget)
     ))

@@ -85,31 +85,12 @@ end
 (*c image_ba *)
 let map_filename = "sample.png"
 let image_ba = 
-   Printf.printf "Open image %s\n" map_filename;
-   let image = ImageLib.openfile map_filename in
-   Printf.printf "Opened image %s\n" map_filename;
-   let (r,g,b,a) =
-     match image.pixels with
-     | RGB (r,g,b)    -> (r,g,b,r)
-     | RGBA (r,g,b,a) -> (r,g,b,a)
-     | _ -> raise Not_found
-    in
-    let r = match r with Pix8 r -> r | _ -> raise Not_found in
-    let g = match g with Pix8 g -> g | _ -> raise Not_found in
-    let b = match b with Pix8 b -> b | _ -> raise Not_found in
-    let a = match a with Pix8 a -> a | _ -> raise Not_found in
-    let width = Bigarray.Array2.dim1 r in
-    let height = Bigarray.Array2.dim2 r in
-    let ba = ba_uint8_array (width*height*4) in
-    for x=0 to (width-1) do
-        for y=0 to (height-1) do
-            ba.{(x+y*width)*4+0} <- r.{x,y};
-            ba.{(x+y*width)*4+1} <- g.{x,y};
-            ba.{(x+y*width)*4+2} <- b.{x,y};
-            ba.{(x+y*width)*4+3} <- (if (a!=r) then 255 else a.{x,y});
-        done
-    done;
-    (width, height, ba)
+  let image = Animlib.Image.create_from_image_file map_filename in
+  let width  = Animlib.Image.width  image in
+  let height = Animlib.Image.height image in
+  let ba = ba_uint8_array (width*height*4) in
+  Animlib.Image.blit_ba image ba;
+  (width, height, ba)
 
 (*a Obj class *)
 (*c ogl_obj_animation *)
@@ -200,7 +181,7 @@ class ogl_widget_animation_server stylesheet name_values server =
         (*Gl.enable Gl.cull_face_enum;*)
         Gl.uniform1i      other_uids.(2) 0 (* T0 = texture sampler 0 *);
 
-        List.iter (fun o -> o#draw view_set other_uids) objs;
+        List.iter (fun o -> o # draw view_set other_uids) objs;
         let anim_obj i o =
            Animation_server.Object.draw o other_uids
         in

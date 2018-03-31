@@ -20,26 +20,80 @@
 type t_ba_float32s = (float, Bigarray.float32_elt,        Bigarray.c_layout) Bigarray.Array1.t
 type t_ba_uint16s  = (int,   Bigarray.int16_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
 type t_ba_uint32s  = (int,   Bigarray.int32_elt,          Bigarray.c_layout) Bigarray.Array1.t
-type t_ba_chars    = (char,  Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
+type t_ba_uint8s   = (int,   Bigarray.int8_unsigned_elt,  Bigarray.c_layout) Bigarray.Array1.t
+type t_ba_chars    = (char,  Bigarray.int8_unsigned_elt,  Bigarray.c_layout) Bigarray.Array1.t
+
+let ba_as_floats ba ofs len = Shm_ipc.Ba.retype_sub Bigarray.float32        Bigarray.c_layout ba ofs len
+let ba_as_int16s ba ofs len = Shm_ipc.Ba.retype_sub Bigarray.int16_unsigned Bigarray.c_layout ba ofs len
+let ba_as_int8s ba ofs len = Shm_ipc.Ba.retype_sub Bigarray.int8_unsigned Bigarray.c_layout ba ofs len
 
 module Shm_server = Shm_server
 module Option = Batteries.Option
 let sfmt = Printf.sprintf
 
+(*a Support modules *)
+(*m Image *)
+module Image =
+struct
+  type t_ba_2d = (int, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array2.t
+  type t = {
+    red_ba   : t_ba_2d;
+    green_ba : t_ba_2d;
+    blue_ba  : t_ba_2d;
+    alpha_ba : t_ba_2d;
+    width : int;
+    height : int;
+    }
+
+  let create_from_image_file filename = 
+    let image = ImageLib.openfile filename in
+    let (r,g,b,a) = 
+      match image.pixels with
+      | RGB (r,g,b)    -> (r,g,b,r)
+      | RGBA (r,g,b,a) -> (r,g,b,a)
+      | _ -> raise Not_found
+    in
+    let red_ba   = match r with Pix8 r_ba -> r_ba | _ -> raise Not_found in
+    let green_ba = match g with Pix8 g_ba -> g_ba | _ -> raise Not_found in
+    let blue_ba  = match b with Pix8 b_ba -> b_ba | _ -> raise Not_found in
+    let alpha_ba = match a with Pix8 a_ba -> a_ba | _ -> raise Not_found in
+    let width  = Bigarray.Array2.dim1 red_ba in
+    let height = Bigarray.Array2.dim2 red_ba in
+    { red_ba; green_ba; blue_ba; alpha_ba;
+      width; height; }
+
+  let ba_size t = 4*t.width*t.height
+
+  let width  t = t.width
+  let height t = t.height
+  let blit_ba t ba = 
+    for x=0 to (t.width-1) do
+      for y=0 to (t.height-1) do
+        ba.{(x+y*t.width)*4+0} <- t.red_ba.{x,y};
+        ba.{(x+y*t.width)*4+1} <- t.green_ba.{x,y};
+        ba.{(x+y*t.width)*4+2} <- t.blue_ba.{x,y};
+        ba.{(x+y*t.width)*4+3} <- if t.alpha_ba==t.red_ba then 255 else (t.alpha_ba.{x,y});
+      done
+    done
+end
+
+(*a Animation modules *)
+(*m Animation_sig *)
 module type Animation_sig =
 sig
   type t
   type t_model
   type t_object
   type t_texture
-  val create_model       : t -> int -> t_ba_float32s -> t_ba_uint16s -> (int * int) array -> t_model option
-  val create_texture     : t -> int -> int -> int -> int -> t_ba_chars -> t_texture option
-  val create_object      : t -> int -> t_model -> t_object option
-  val object_set_target  : t -> t_object -> float -> int -> t_ba_float32s -> unit
-  val delete_model       : t -> t_model -> unit
-  val delete_object      : t -> t_object -> unit
-  val delete_texture     : t -> t_texture -> unit
-  val animate            : t -> int -> float -> (int * float)
+  val create_model        : t -> int -> t_ba_float32s -> t_ba_uint16s -> (int * int) array -> t_model option
+  val create_texture      : t -> int -> int -> int -> int -> t_ba_chars -> t_texture option
+  val create_object       : t -> int -> t_model -> t_object option
+  val object_set_target   : t -> t_object -> float -> int -> t_ba_float32s -> unit
+  val object_set_material : t -> t_object -> float -> int -> t_ba_float32s -> unit
+  val delete_model        : t -> t_model -> unit
+  val delete_object       : t -> t_object -> unit
+  val delete_texture      : t -> t_texture -> unit
+  val animate             : t -> int -> float -> (int * float)
 end
 
 (*m Animation *)
@@ -173,7 +227,10 @@ struct
 
   (*m Model *)
   module Model = struct
+    (*t exceptin BadArgs *)
     exception BadArgs of string
+
+    (*t type tc - model under construction *)
     type tc = {
         mutable id : int;
         mutable coords : int * int;
@@ -181,6 +238,7 @@ struct
         mutable elements : (int * int) array;
       }
 
+    (*f create *)
     let create _ = 
       {
         id = 0;
@@ -189,6 +247,7 @@ struct
         elements = [||];
       }
 
+    (*f rpc_create_args *)
     let rpc_create_args id cs_is_es =
       if (Array.length cs_is_es)<>6 then (
         raise (BadArgs "cs_is_es must be ofs,len,ofs,len,ofs,len")
@@ -196,9 +255,10 @@ struct
         Shm_ipc.Mbf.Make.(List [Int id; ArrayInt32 cs_is_es])
       )
 
-    let parse_id mc s =
-      mc.id <- s; mc
+    (*f parse_id - callback for parser to set data from an rpc message *)
+    let parse_id mc s = mc.id <- s; mc
 
+    (*f parse_cs_is_es - callback for parser to set data from an rpc message *)
     let parse_cs_is_es mc ba =
       let l = Bigarray.Array1.dim ba in
       if l>=2 then mc.coords  <- Int32.(to_int ba.{0}, to_int ba.{1});
@@ -206,8 +266,10 @@ struct
       if l>=6 then mc.elements <- Array.init ((l-4)/2) (fun i -> Int32.(to_int ba.{(i*2)+4}, to_int ba.{(i*2)+5}));
       mc
 
+    (*f parser_of_key - map key number to callback *)
     let parser_of_key k = Shm_ipc.Mbf.([| Int parse_id ; RepInt32 parse_cs_is_es |]).(k)
 
+    (*f rpc_parse_msg - parse an RPC 'create model' message *)
     let rpc_parse_msg a msg_ba ofs len =
       let mc = create () in
       let mc = Shm_ipc.Mbf.fold_message msg_ba parser_of_key mc ofs len in
@@ -218,6 +280,7 @@ struct
       let opt_model = A.create_model a.parent mc.id cs is mc.elements in
       (mc.id, opt_model)
 
+    (*f All done *)
   end
 
   (*m Object *)
@@ -289,6 +352,87 @@ struct
       let st = Shm_ipc.Mbf.fold_message msg_ba set_target_parser_of_key st ofs len in
       Some (st.st_id, st.st_time, st.st_reason, st.st_ba)
 
+    (*f set_material_parse_* - mbf parse callback to set object id *)
+    let set_material_parse_id     st id     = st.st_id      <- id     ; st
+    let set_material_parse_time   st time   = st.st_time    <- time   ; st
+    let set_material_parse_reason st reason = st.st_reason  <- reason ; st
+    let set_material_parse_args   st ba     = st.st_ba      <- ba     ; st
+
+    (*f rpc_set_material_args *)
+    let rpc_set_material_args id time reason args =
+      Shm_ipc.Mbf.Make.(List [Int id; Float time; Int reason; ArrayFloat args])
+
+    (*f set_material_parser_of_key - map from mbf key to parser (must match rpc_set_material_args) *)
+    let set_material_parser_of_key k = Shm_ipc.Mbf.([| Int set_material_parse_id ; Float set_material_parse_time ; Int set_material_parse_reason ; RepFloat set_material_parse_args |]).(k)
+
+    (*f rpc_set_material_parse_msg - parse object set material message *)
+    let rpc_set_material_parse_msg a msg_ba ofs len =
+      let st = {st_id=0;st_time=0.;st_reason=0;st_ba=ba_dummy_floats} in
+      let st = Shm_ipc.Mbf.fold_message msg_ba set_material_parser_of_key st ofs len in
+      Some (st.st_id, st.st_time, st.st_reason, st.st_ba)
+
+    (*f All done *)
+  end
+
+  (*m Texture *)
+  module Texture = struct
+    (*t BadArgs exception *)
+    exception BadArgs of string
+
+    (*t tc - texture under construction *)
+    type tc = {
+        mutable id : int;
+        mutable width : int;
+        mutable height : int;
+        mutable data_type : int;
+        mutable data_ofs : int;
+      }
+
+    (*f create _ - create object under construction *)
+    let create _ = 
+      {
+        id = 0;
+        width = 0;
+        height = 0;
+        data_type = 0;
+        data_ofs = 0;
+      }
+
+    (*f create_parse_id - mbf parse callback to set texture id *)
+    let create_parse_id mc s = mc.id <- s; mc
+
+    (*f create_parse_width - mbf parse callback to set texture width *)
+    let create_parse_width mc s = mc.width <- s; mc
+
+    (*f create_parse_height - mbf parse callback to set texture height *)
+    let create_parse_height mc s = mc.height <- s; mc
+
+    (*f create_parse_data_type - mbf parse callback to set texture data_type *)
+    let create_parse_data_type mc s = mc.data_type <- s; mc
+
+    (*f create_parse_data_ofs - mbf parse callback to set texture data_ofs *)
+    let create_parse_data_ofs mc s = mc.data_ofs <- s; mc
+
+    (*f rpc_create_msg - return the structure of a shm ipc mbf for create object id of model_id *)
+    let rpc_create_msg id width height data_type data_ofs =
+      Shm_ipc.Mbf.Make.(List [Int id; Int width; Int height; Int data_type; Int data_ofs])
+
+    (*f create_parser_of_key - map from mbf key to parser (must match rpc_create_args) *)
+    let create_parser_of_key k = Shm_ipc.Mbf.([| Int create_parse_id ;
+                                                 Int create_parse_width;
+                                                 Int create_parse_height;
+                                                 Int create_parse_data_type;
+                                                 Int create_parse_data_ofs;
+                                              |]).(k)
+
+    (*f rpc_parse_create_msg - parse texture create message *)
+    let rpc_parse_create_msg a msg_ba ofs len =
+      let mc = create () in
+      let mc = Shm_ipc.Mbf.fold_message msg_ba create_parser_of_key mc ofs len in
+      let data_ba = Shm_ipc.Ba.retype_sub Bigarray.char Bigarray.c_layout msg_ba mc.data_ofs (len-mc.data_ofs) in
+      let opt_texture = A.create_texture a.parent mc.id mc.data_type mc.width mc.height data_ba in
+      (mc.id, opt_texture)
+
     (*f All done *)
   end
 
@@ -314,7 +458,7 @@ struct
     (*f animate_parser_of_key - map from mbf key to parser (must match rpc_animate_args) *)
     let animate_parser_of_key k = Shm_ipc.Mbf.([| Int animate_parse_why ; Float animate_parse_time |]).(k)
 
-    (*f rpc_animate_parse_msg - parse object set target message *)
+    (*f rpc_animate_parse_msg - parse object animate message *)
     let rpc_animate_parse_msg a msg_ba ofs len =
       let ta = {why=0; time=0.;} in
       let ta = Shm_ipc.Mbf.fold_message msg_ba animate_parser_of_key ta ofs len in
@@ -339,6 +483,11 @@ struct
     let args = Model.rpc_create_args id cs_is_es in
     rpc_msg ba size "model_create" args
 
+  (*f rpc_texture_create_msg *)
+  let rpc_texture_create_msg ba size id width height data_type data_ofs =
+    let args = Texture.rpc_create_msg id width height data_type data_ofs in
+    rpc_msg ba size "texture_create" args
+
   (*f rpc_object_create_msg *)
   let rpc_object_create_msg ba size id model_id =
     let args = Object.rpc_create_args id model_id in
@@ -353,6 +502,14 @@ struct
   let parse_model_create t (msg_ba,ofs,len) = 
     (match (Model.rpc_parse_msg t msg_ba ofs len) with 
      | (id, Some model) -> add_model t id model
+     | _ -> ()
+    );
+    t
+                        
+  (*f parse_texture_create *)
+  let parse_texture_create t (msg_ba,ofs,len) = 
+    (match (Texture.rpc_parse_create_msg t msg_ba ofs len) with 
+     | (id, Some texture) -> add_texture t id texture
      | _ -> ()
     );
     t
@@ -383,6 +540,19 @@ struct
     let args = Object.rpc_set_target_args id time reason args in
     rpc_msg ba size "object_set_target" args
 
+  (*f parse_object_set_material *)
+  let parse_object_set_material t (msg_ba,ofs,len) = 
+    (match (Object.rpc_set_material_parse_msg t msg_ba ofs len) with
+     | Some (id, time, reason, ba) -> map_object_of_id t id () (fun o -> A.object_set_material t.parent o time reason ba)
+     | _ -> ()
+    );
+    t
+
+  (*f rpc_object_set_material_msg *)
+  let rpc_object_set_material_msg ba size id time reason args =
+    let args = Object.rpc_set_material_args id time reason args in
+    rpc_msg ba size "object_set_material" args
+
   (*f parse_animate *)
   let parse_animate t (msg_ba,ofs,len) = 
     (match (Timing.rpc_animate_parse_msg t msg_ba ofs len) with
@@ -406,9 +576,11 @@ struct
   let _ =                      
     Rpc.add_type "reset"              (Shm_ipc.Mbf.Int parse_reset);
     Rpc.add_type "model_create"       (Shm_ipc.Mbf.Blob parse_model_create);
+    Rpc.add_type "texture_create"     (Shm_ipc.Mbf.Blob parse_texture_create);
     Rpc.add_type "object_create"      (Shm_ipc.Mbf.Blob parse_object_create);
     Rpc.add_type "object_delete"      (Shm_ipc.Mbf.Int parse_object_delete);
     Rpc.add_type "object_set_target"  (Shm_ipc.Mbf.Blob parse_object_set_target);
+    Rpc.add_type "object_set_material"  (Shm_ipc.Mbf.Blob parse_object_set_material);
     Rpc.add_type "animate"            (Shm_ipc.Mbf.Blob parse_animate);
     ()
   
@@ -439,6 +611,7 @@ struct
     let create_texture  t s tx w h data = Some (sfmt "texture %d" s)
     let create_object   t s m          = Some (sfmt "object %d"  s)
     let object_set_target    t s time reason ba         = ()
+    let object_set_material  t s what arg ba         = ()
     let delete_model    t m = ()
     let delete_object   t m = ()
     let delete_texture  t m = ()
@@ -457,17 +630,24 @@ module BasicClient =
     include Animation(BasicClient_base(BasicClientType))
     type bct = BasicClientType.t
 
+    (*v statics *)
+    let long_delay = 1000*1000
+
+    (*f create *)
     let create _ = 
       let client = Shm_server.Client.create () in
       let t:bct = {client;} in
       ignore (animation_create t);
       t
 
+    (*f client - return the base client *)
     let client (t:bct) = t.client
 
+    (*f msg_alloc - Allocate a message - return msg * msg_ba * msg_id *)
     let msg_alloc (t:bct) byte_size =
       Shm_server.Client.msg_alloc t.client byte_size
 
+    (*f poll_idle - poll for a delay (freeing returned messages) *)
     let poll_idle (t:bct) delay =
       let msg_callback rx_id msg msg_ba =
         ignore (Shm_server.Client.msg_free t.client msg);
@@ -475,6 +655,12 @@ module BasicClient =
       in
       Shm_server.Client.poll t.client msg_callback delay
 
+    (*f poll_for_msg - poll until a particular message id returns
+
+        freeing messages, calling back on desired message first
+
+        Return false if message not received within delay
+     *)
     let poll_for_msg (t:bct) ?callback id delay =
       let rec poll _ =
         let response_received = ref None in
@@ -496,30 +682,58 @@ module BasicClient =
       in
       poll ()
 
-    let send (t:bct) msg id =  
+    (*f send - send a message *)
+    let send (t:bct) msg msg_id =  
+      (* Printf.printf "Send message %d\n%!" msg_id; *)
       ignore (Shm_server.Client.send t.client msg);
-      ()
+      msg_id
 
+    (*f send_and_wait - send a message and wait for its response with a callback
+
+        Returns false if the message reply was not received in time
+     *)
     let send_and_wait ?delay:(delay=100000) ?callback (t:bct) msg id =  
-      send t msg id;
-      poll_for_msg t ?callback:callback id delay
+      poll_for_msg t ?callback:callback (send t msg id) delay
 
+    (*f reset - reset the animation server (clears all models, textures, objects) *)
     let reset t =
-      let (msg,msg_ba,id) = msg_alloc t 1024 in
-      ignore (rpc_reset_msg msg_ba 1024);
+      let (msg,msg_ba,id) = msg_alloc t 64 in
+      ignore (rpc_reset_msg msg_ba 64);
+      send_and_wait ~delay:long_delay t msg id
+
+    (*f animate - set time, play, pause, etc *)
+    let animate t why time =
+      let (msg,msg_ba,id) = msg_alloc t 64 in
+      ignore (rpc_animate_msg msg_ba 64 why time);
       send_and_wait t msg id
 
-    let move_to t time id x y z =
-      let (msg,msg_ba,msg_id) = msg_alloc t 1024 in
-      ignore (rpc_object_set_target_msg msg_ba 1024 id time 1 [|x;y;z;1.;|]);
+    (*f send_msg_from_ba - create and send a message packed in another ba *)
+    let send_msg_from_ba t ?size ba =
+      let l = Option.default (Bigarray.Array1.dim ba) size in
+      let (msg,msg_ba,msg_id) = msg_alloc t l in
+      Bigarray.Array1.(blit ba msg_ba);
+      send t msg msg_id
+
+    (*f create_object - create and object given a model *)
+    let create_object t obj_id model_id =
+      let (msg,msg_ba,msg_id) = msg_alloc t 128 in
+      ignore (rpc_object_create_msg msg_ba 128 obj_id model_id);
       send_and_wait t msg msg_id
 
-    let animate t why time =
-      let (msg,msg_ba,id) = msg_alloc t 1024 in
-      ignore (rpc_animate_msg msg_ba 1024 why time);
-      send_and_wait t msg id
+    (*f move_to - move an object to an x/y/z, wait for response *)
+    let move_to t time id x y z =
+      let (msg,msg_ba,msg_id) = msg_alloc t 128 in
+      ignore (rpc_object_set_target_msg msg_ba 128 id time 1 [|x;y;z;1.;|]);
+      send t msg msg_id
 
-    let wait_for_time t time =
+    (*f set_material - wait for response *)
+    let set_material t time id tex_id =
+      let (msg,msg_ba,msg_id) = msg_alloc t 128 in
+      ignore (rpc_object_set_material_msg msg_ba 128 id time tex_id [|0.;|]);
+      send t msg msg_id
+
+    (*f wait_for_time - wait for animation to reach time *)
+    let wait_for_time ?ticks_per_second:(tps=1000.*.1000.) t time =
       let rec wait _ =
         let current_time = ref None in
         let current_time_cb msg_ba =
@@ -531,43 +745,42 @@ module BasicClient =
         in
         let (msg,msg_ba,id) = msg_alloc t 1024 in
         ignore (rpc_animate_msg msg_ba 1024 3 0.);
-        send_and_wait ~callback:current_time_cb t msg id;
-        match !current_time with 
-        | Some sim_time -> (
-          let delay = int_of_float ((time-.sim_time) *. 100000.) in
-          Printf.printf "Time %f %f delay %d\n%!" time sim_time delay;
-          if delay<1000 then () else (poll_idle t delay; wait ())
+        if (send_and_wait ~callback:current_time_cb t msg id) then (
+          match !current_time with 
+          | Some sim_time -> (
+            let delay = int_of_float ((time-.sim_time) *. tps) in
+            (*Printf.printf "Time %f %f delay %d\n%!" time sim_time delay;*)
+            if delay<1000 then true
+            else if (poll_idle t (delay/3)) then  (* don't wait the whole amount to make it smoother *)
+              wait ()
+            else false (* not alive any more *)
+          )
+          | _ -> false (* no useful reply *)
+        ) else ( (* timed-out waiting for reply to animate message *)
+         false
         )
-        | _ -> ()
       in
       wait ()
 
+    (*f create_model_ba *)
+    let create_model_ba model_id coords indices element_type num_elements =
+      let num_floats  = Array.length coords in
+      let num_indices = Array.length indices in
+      let indices_start = 128 in
+      let floats_start = indices_start + (2*num_indices) in
+      let floats_end   = floats_start  + (4*num_floats) in
+      let ba = Bigarray.(Array1.create char c_layout floats_end) in
+      let okay = rpc_model_create_msg ba indices_start model_id Int32.([|of_int floats_start;of_int num_floats;of_int indices_start; of_int num_indices; of_int element_type; of_int num_elements |]) in
+      if okay then (
+        let floats_ba  = ba_as_floats ba floats_start (floats_end - floats_start) in
+        let indices_ba = ba_as_int16s ba indices_start (floats_start - indices_start) in
+        Array.iteri (fun i f -> floats_ba.{i} <- f) coords;
+        Array.iteri (fun i n -> indices_ba.{i} <- n) indices;
+        Some ba
+      ) else (
+        None
+      )
 
-(*
-
-  let create_model_ba model_id coords indices element_type num_elements =
-    let num_floats  = Array.length coords in
-    let num_indices = Array.length indices in
-    let indices_start = 128 in
-    let floats_start = indices_start + (2*num_indices) in
-    let floats_end   = floats_start  + (4*num_floats) in
-    let ba = Bigarray.(Array1.create char c_layout floats_end) in
-    let okay = Ac.rpc_model_create_msg ba indices_start model_id Int32.([|of_int floats_start;of_int num_floats;of_int indices_start; of_int num_indices; of_int element_type; of_int num_elements |]) in
-    if okay then (
-      let floats_ba  = ba_as_floats ba floats_start (floats_end - floats_start) in
-      let indices_ba = ba_as_int16s ba indices_start (floats_start - indices_start) in
-      Array.iteri (fun i f -> floats_ba.{i} <- f) coords;
-      Array.iteri (fun i n -> indices_ba.{i} <- n) indices;
-      Some ba
-    ) else (
-      None
-    )
-
- *)
+    (*f All done *)
 end
-
-
-  (*
-  object_place  : object -> position -> quaternion -> scale -> result (?time?)
-   *)
 

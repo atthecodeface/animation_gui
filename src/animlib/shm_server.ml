@@ -71,11 +71,11 @@ struct
   let msg_alloc t size = 
     let id = t.next_msg_id in
     t.next_msg_id <- t.next_msg_id + 1;
-    let msg = Shm_ipc.Ipc.Client.msg_alloc t.client size in
+    let msg = Shm_ipc.Ipc.Client.msg_alloc t.client (size+4) in
     let msg_ba = Shm_ipc.Ipc.msg_ba msg in
     let msg_id = Shm_ipc.Ba.retype_sub Bigarray.int32 Bigarray.c_layout msg_ba 0 4 in
     msg_id.{0} <- Int32.of_int id;
-    let msg_ba = Bigarray.Array1.sub msg_ba 4 (size-4) in
+    let msg_ba = Bigarray.Array1.sub msg_ba 4 size in
     (msg, msg_ba, id)
 
   let msg_free t msg = 

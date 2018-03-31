@@ -5,6 +5,7 @@
   (public_name animlib)
   (libraries (
     shm_ipc
+    imagelib
     batteries
   ))
 ))

@@ -6,7 +6,9 @@ animation:
 	./_build/default/src/animation/animation_top.exe
 
 client:
-	jbuilder build @run_example
+	jbuilder build ./_build/default/src/example_client/example_client.exe
+	jbuilder build ./_build/default/src/animation/animation_top.exe
+	(./_build/default/src/animation/animation_top.exe & (sleep 1;./_build/default/src/example_client/example_client.exe))
 
 test:
 	jbuilder build @run_test
