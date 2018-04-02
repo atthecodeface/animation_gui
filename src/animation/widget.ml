@@ -81,17 +81,6 @@ struct
 
 end
 
-(*a Texture reading *)
-(*c image_ba *)
-let map_filename = "sample.png"
-let image_ba = 
-  let image = Animlib.Image.create_from_image_file map_filename in
-  let width  = Animlib.Image.width  image in
-  let height = Animlib.Image.height image in
-  let ba = ba_uint8_array (width*height*4) in
-  Animlib.Image.blit_ba image ba;
-  (width, height, ba)
-
 (*a Obj class *)
 (*c ogl_obj_animation *)
 class ogl_obj_animation =
@@ -141,8 +130,6 @@ class ogl_widget_animation_server stylesheet name_values server =
     val mutable tex_glid = -1;
 
     method create_geometry =
-      let (w,h,ba) = image_ba in
-      tex_glid <- Ogl_gui.Texture.Texture.create_from_ba w h ba;
       super # create_geometry
 
     (*f mouse - handle a mouse action along the action vector *)

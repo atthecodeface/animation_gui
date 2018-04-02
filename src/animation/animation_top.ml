@@ -49,7 +49,7 @@ let main () =
   let anon _ = raise (Arg.Bad "no arguments are supported") in
   Arg.parse (Arg.align options) anon usage;
 
-  let server = Animation_server.AnimationServer.create 655360L in
+  let server = Animation_server.AnimationServer.create (Int64.of_int (2*1024*1024)) in
   match App.create server app_xml with
     None -> 
     (

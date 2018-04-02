@@ -493,6 +493,11 @@ struct
     let args = Object.rpc_create_args id model_id in
     rpc_msg ba size "object_create" args
 
+  (*f rpc_object_delete_msg *)
+  let rpc_object_delete_msg ba size id =
+    let args = Shm_ipc.Mbf.Make.Int id in
+    rpc_msg ba size "object_delete" args
+
   (*f parse_reset *)
   let parse_reset t _ = 
     reset t;
@@ -719,6 +724,12 @@ module BasicClient =
       let (msg,msg_ba,msg_id) = msg_alloc t 128 in
       ignore (rpc_object_create_msg msg_ba 128 obj_id model_id);
       send_and_wait t msg msg_id
+
+    (*f delete_object - delete an object, don't wait *)
+    let delete_object t obj_id =
+      let (msg,msg_ba,msg_id) = msg_alloc t 128 in
+      ignore (rpc_object_delete_msg msg_ba 128 obj_id);
+      send t msg msg_id
 
     (*f create_texture_of_file *)
     let create_texture_of_file t tex_id filename =

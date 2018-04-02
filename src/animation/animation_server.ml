@@ -170,10 +170,13 @@ struct
   let set_time t time =
     if not t.interpolating then (
       t.target_time <- time;
-    ) else if (compare time t.last_time) = (compare time t.target_time) then (
-      t.target_time <- time;
+    ) else if (time < t.last_time) then (
+      ()
+    ) else if (time > t.target_time) then (
+      A.set t.current_value t.target_value;
       t.interpolating <- false
-    ) else if (compare t.last_time t.target_time)=0 then (
+    ) else if (t.last_time = t.target_time) then (
+      A.set t.current_value t.target_value;
       t.target_time <- time;
       t.interpolating <- false
     ) else (
@@ -231,7 +234,6 @@ struct
     }
 
   let animate t why time =
-    Printf.printf "animate %d %f\n%!" why time;
     (
     match why with
     | 0 -> t.paused <- true
